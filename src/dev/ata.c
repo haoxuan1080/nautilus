@@ -279,7 +279,7 @@ static int ata_lba48_read_write(struct ata_blkdev_state *s,
 	  write ? "write" : "read",
 	  devnum, block_num, count);
  
-    // count is encoded with 0 == 64K sectors
+    // count is encoded with 0 == 64K sectors, This is basically doing modulo in my opinion
     if (count==65536) { 
 	atacount=0;
     } else {
@@ -311,7 +311,7 @@ static int ata_lba48_read_write(struct ata_blkdev_state *s,
     outb(lba[5],LBAMID(devnum));
     outb(lba[6],LBAHI(devnum));
     outb(sectcnt[0],SECTCOUNT(devnum));
-    outb(lba[1],LBALO(devnum));
+    outb(lba[1],LBALO(devnum)); //How does it write 16-bit data to the register with outb?
     outb(lba[2],LBAMID(devnum));
     outb(lba[3],LBAHI(devnum));
 
@@ -334,7 +334,7 @@ static int ata_lba48_read_write(struct ata_blkdev_state *s,
 	    return -1;
 	}
 	DEBUG("Handling block %lu\n",i);
-	for (j=0;j<256;j++) {
+	for (j=0;j<256;j++) { //what does this 256 mean?
 	    uint16_t cur;
 	    if (write) { 
 		cur = *((uint16_t *)(srcdest+i*512+j*2));

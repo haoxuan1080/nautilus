@@ -4,6 +4,7 @@ obj-y += apic.o \
 	 ps2.o \
 	 pci.o \
          vga.o \
+	 ata_pci.o \
 
 ifndef NAUT_CONFIG_XEON_PHI
 obj-y += serial.o

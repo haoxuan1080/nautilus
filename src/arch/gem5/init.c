@@ -102,6 +102,9 @@
 #ifdef NAUT_CONFIG_ATA
 #include <dev/ata.h>
 #endif
+
+#include <dev/ata_pci.h>
+
 #ifdef NAUT_CONFIG_EXT2_FILESYSTEM_DRIVER
 #include <fs/ext2/ext2.h>
 #endif
@@ -496,6 +499,8 @@ init (unsigned long mbd,
 #ifdef NAUT_CONFIG_ATA
     nk_ata_init(naut);
 #endif
+
+    nk_ata_pci_init(naut);
 
 #ifdef NAUT_CONFIG_VIRTIO_PCI
     virtio_pci_init(naut);
