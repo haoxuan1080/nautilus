@@ -504,7 +504,7 @@ init (unsigned long mbd,
 #endif
 
 #ifdef NAUT_CONFIG_ATA
-    nk_ata_init(naut);
+    //nk_ata_init(naut);
 #endif
 
     nk_ata_pci_init(naut);
