@@ -3,7 +3,11 @@
 #include <nautilus/nautilus.h>
 #include <nautilus/blkdev.h>
 #include <dev/ata_pci.h>
-
+#include <nautilus/list.h>
+#include <dev/pci.h>
+#include <nautilus/mm.h>
+#include <nautilus/naut_string.h>
+#include <nautilus/cpu.h> //We don't know whether we need it?
 //#ifndef NAUT_CONFIG_DEBUG_ATA_PCI
 //#undef DEBUG_PRINT
 //#define DEBUG_PRINT(fmt, args...)
@@ -29,8 +33,45 @@ typedef struct prdt* prdt_t;
 struct ata_blkdev_state {
     struct nk_block_dev *blkdev;
 
+    struct pci_dev* pdev;// this is the pointer pointing to the pci device
+    struct pci_bus* bus;
+
     spinlock_t lock;
 
+    uint16_t data;
+    uint16_t error;
+    uint16_t sector_count;
+ 
+ 	union {
+		uint16_t sector_num;
+		uint16_t lba_lo ;
+	};
+	union {
+		uint16_t cylinder_low;
+		uint16_t lba_mid ;
+	};
+	union {
+		uint16_t cylinder_high;
+		uint16_t lba_high;
+	};
+	union {
+		uint16_t drive;
+		uint16_t head;
+	};
+	union {
+		uint16_t command;
+		uint16_t status;
+	};
+	union {
+		uint16_t control;
+		uint16_t alt_status;
+	};
+    
+    uint32_t bar4; //bar4 for legacy mode
+    uint32_t BMR_cmd;
+    uint32_t BMR_prdt;
+    uint32_t BMR_status;
+    
     prdt_t prdt;
 
     uint8_t* prdt_phys;
@@ -205,11 +246,11 @@ static int ata_drive_identify(struct ata_blkdev_state *s)
 
     ata_reset(s);
     ata_drive_select(s);
-    outb(0,SECTCOUNT(devnum));
-    outb(0,LBALO(devnum));
-    outb(0,LBAMID(devnum));
-    outb(0,LBAHI(devnum));
-    outb(0xec, CMDSTATUS(devnum)); // IDENTIFY
+    outb(0, s->sector_count);
+    outb(0, s->lba_lo);
+    outb(0, s->lba_mid);
+    outb(0, s->lba_high);
+    outb(0xec, s->command); // IDENTIFY
 
     if (!inb(CMDSTATUS(devnum))) {
         // nonexistent drive... why am I identifying it?
@@ -241,7 +282,7 @@ static int ata_drive_identify(struct ata_blkdev_state *s)
     DEBUG("Acquiring identity block from drive\n");
 
     for (j=0;j<256;j++) {
-        buf[j] = inw(DATA(devnum));
+        buf[j] = inw(s->data);
     }
     if (!((buf[83] >> 10) & 0x1)) {
         ERROR("LBA48 not supported on this drive\n");
@@ -282,16 +323,51 @@ static struct nk_block_dev_int inter =
     .write_blocks = write_blocks,
 };
 
+static void ata_device_addr_init(int devnum, void* dev)
+{
+    struct ata_blkdev_state *s = (struct ata_blkdev_state *) dev;
+    s->data = DATA(devnum);
+    s->error = s->data+1;
+    s->sector_count = s->data + 2;
+    s->lba_lo = s->data + 3;
+    s->lba_mid = s->data + 4;
+    s->lba_high = s->data + 5;
+    s->head = s->data + 6;
+    s->command = s->data + 7;
+    s->control = ALTCMDSTATUS(devnum);
 
-static void discover_device(int channel, int id)
+
+
+    //We need to find bar4 though pci and then assign address of BMR
+    //
+    s->bar4 = s->pdev->cfg.dev_cfg.bars[4];
+    s->BMR_cmd = s->bar4;
+    s->BMR_status = s->bar4 + 2; 
+    s->BMR_prdt = s->bar4 + 4;
+
+    s->prdt = (void*)malloc(sizeof(struct prdt));
+    memset(s->prdt, 0, sizeof(struct prdt));
+    s->prdt_phys = (uint8_t*)s->prdt;// this actually virtual address 
+    s->mem_buffer = (void*)malloc(4096);
+    memset(s->mem_buffer, 0, 4096);
+    s->prdt[0].buffer_phys = (uint32_t)s->mem_buffer;//we cast pointer to 32 bit
+    s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
+    s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
+
+}
+
+static void discover_device(int channel, int id, struct pci_bus *bus, struct pci_dev *pdev)
 {
     int devnum = channel*2 + id;
     struct ata_blkdev_state *s = &(controller.devices[devnum]);
 
+    s->bus = bus;
+    s->pdev = pdev;
+
     DEBUG("Considering device ata0-%d-%d\n",channel,id);
 
     spinlock_init(&s->lock); //do we really need this while booting
-
+    
     s->channel = channel;
     s->id = id;
     s->controller = &controller;
@@ -321,14 +397,62 @@ static void discover_device(int channel, int id)
 
 }
 
-static int discover_ata_drives()
+
+
+static int discover_ata_drives(struct naut_info * naut)
 {
     memset((void*)&controller,0,sizeof(controller));
 
-    discover_device(0,0);
-    discover_device(0,1);
-    discover_device(1,0);
-    discover_device(1,1);
+    struct pci_info *pci = naut->sys.pci;
+    struct list_head *curbus, *curdev;
+    struct pci_bus *bus = NULL;
+    struct pci_dev *pdev = NULL;
+    uint32_t num = 0;
+
+    INFO("init\n");
+
+    struct list_head dev_list;
+
+    INIT_LIST_HEAD(&dev_list);
+
+    if (!pci) {
+        ERROR("No PCI info\n");
+        return -1;
+    }
+
+    list_for_each(curbus,&(pci->bus_list)) {
+        bus = list_entry(curbus,struct pci_bus,bus_node);
+
+        DEBUG("Searching PCI bus %u for IDE devices\n", bus->num);
+
+        list_for_each(curdev, &(bus->dev_list)) {
+            pdev = list_entry(curdev,struct pci_dev,dev_node);
+            struct pci_cfg_space *cfg = &pdev->cfg;
+	    DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
+	    if (cfg->class_code == 0x01 && cfg->subclass == 0x01){
+		    DEBUG("IDE Device Found\n");
+		    break;
+	    }
+            
+        }
+            if (pdev->cfg.class_code == 0x01 && pdev->cfg.subclass == 0x01){
+		    DEBUG("IDE Device Found\n");
+		    break;
+	    }
+
+    }
+
+    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, 0, 0x04);
+    if(!(pci_command_reg & (1 << 2))) {
+        pci_command_reg |= (1 << 2);
+    }
+    pci_cfg_writel(bus->num, pdev->num, 0, 0x04, pci_command_reg);
+
+    //PCI staff ends, discover device 
+    discover_device(0,0, bus, pdev);
+    discover_device(0,1, bus, pdev);
+    discover_device(1,0, bus, pdev);
+    discover_device(1,1, bus, pdev);
 
     return 0;
 }
@@ -338,7 +462,7 @@ int nk_ata_pci_init(struct naut_info * naut)
 {
     printk("You should print sth\n");
     INFO("init ata_pci\n");
-    return discover_ata_drives(); 
+    return discover_ata_drives(naut); 
 }
 
 
