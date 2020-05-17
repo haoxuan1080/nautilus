@@ -301,19 +301,153 @@ static int ata_drive_identify(struct ata_blkdev_state *s)
     }
 }
 
+static int ata_lba48_read_write_dma(void* state,
+		                    uint64_t block_num,
+				    uint8_t *buf,
+				    int write)
+{
+    struct ata_blkdev_state *s = (struct ata_blkdev_state *) state;
+
+    uint8_t sectcnt[2];
+    uint8_t lba[7]; // we use 1..6 as per convention...
+
+    lba[6] = (block_num >> 40) & 0xff;
+    lba[5] = (block_num >> 32) & 0xff;
+    lba[4] = (block_num >> 24) & 0xff;
+    lba[3] = (block_num >> 16) & 0xff;
+    lba[2] = (block_num >>  8) & 0xff;
+    lba[1] = (block_num >>  0) & 0xff;
+
+    if (ata_wait(s,0)) {
+        ERROR("Wait failed - resetting drive\n");
+        ata_reset(s);
+        return -1;
+    }
+
+    outb(0, s->BMR_cmd);
+    outb(0, s->BMR_status);
+    outl((uint32_t)s->prdt_phys, s->BMR_prdt);
+    outb(0x40 | (s->id << 4), s->head);
+    outb(lba[4],s->lba_lo);
+    outb(lba[5],s->lba_mid);
+    outb(lba[6],s->lba_high);
+    outb(1,s->sector_count);
+    outb(lba[1],s->lba_lo); //How does it write 16-bit data to the register with outb?
+    outb(lba[2],s->lba_mid);
+    outb(lba[3],s->lba_high);
+    
+    DEBUG("LBA and sector count completed\n");
+
+    if (write) {
+        memcpy(s->mem_buffer, buf, 512);
+        outb(0x35, s->command);
+        outb(0x1, s->BMR_cmd);
+    }
+    else {
+        outb(0x25, s->command);
+	outb(0x8 | 0x1, s->BMR_cmd);
+    }
+
+
+    //polling and wait
+    if(ata_wait(s,1)) {
+	    ERROR("wait failed - resetting\n");
+            ata_reset(s);
+            return -1;
+    }
+
+    while(1) {
+        int status = inb(s->BMR_status);
+	int dstatus = inb(s->status);
+	//for (int i = 0; i < 512; i++) {
+	//    DEBUG("values = %c\n", ((char*)(uint64_t)s->prdt[0].buffer_phys)[i]);
+	//    //DEBUG("phys values = %c\n", s->)
+	//}
+        //DEBUG("BMR status = %x\n", status);
+	if(!(status & 0x04)) {
+	    continue;
+	}
+
+	if (!(dstatus & 0x80)) {
+	    break;
+	}
+    }
+
+    if (!write) {
+        memcpy(buf, s->mem_buffer, 512);
+    }
+
+    return 0;
+}
+
 static int read_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *dest,void (*callback)(nk_block_dev_status_t, void *), void *context)
 {
-   return 0;
+    STATE_LOCK_CONF;
+    struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+    DEBUG("read_blocks on device %s starting at %lu for %lu blocks\n",
+          s->blkdev->dev.name, blocknum, count);
+    STATE_LOCK(s);
+    if (blocknum+count >= s->num_blocks) {
+        STATE_UNLOCK(s);
+        ERROR("Illegal access past end of disk\n");
+        return -1;
+    } else {
+        int rc =0;
+	for (int i = 0; i<count; i++) {
+	    DEBUG("read on device %s block num %u\n", s->blkdev->dev.name, i);
+
+            rc += ata_lba48_read_write_dma(s,blocknum+i*512, dest+i*512, 0);
+	}
+	
+        STATE_UNLOCK(s);
+        if (callback) {
+            callback(NK_BLOCK_DEV_STATUS_SUCCESS,context);
+        }
+        return rc;
+    }
+
 }
 
 static int write_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *src,void (*callback)(nk_block_dev_status_t, void *), void *context)
 {
-    return 0;
+    STATE_LOCK_CONF;
+    struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+    DEBUG("write_blocks on device %s starting at %lu for %lu blocks\n",
+          s->blkdev->dev.name, blocknum, count);
+    STATE_LOCK(s);
+    if (blocknum+count >= s->num_blocks) {
+        STATE_UNLOCK(s);
+        ERROR("Illegal access past end of disk\n");
+        return -1;
+    } else {
+        int rc =0;
+        for (int i = 0; i<count; i++) {
+            
+            DEBUG("write on device %s block num %u\n", s->blkdev->dev.name, i);
+
+            rc += ata_lba48_read_write_dma(s,blocknum+i*512, src+i*512, 1);
+        }
+
+        STATE_UNLOCK(s);
+        if (callback) {
+            callback(NK_BLOCK_DEV_STATUS_SUCCESS,context);
+        }
+        return rc;
+    }
+    
 }
 
 static int get_characteristics(void *state, struct nk_block_dev_characteristics *c)
 {
+    STATE_LOCK_CONF;
+    struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+
+    STATE_LOCK(s);
+    c->block_size = s->block_size;
+    c->num_blocks = s->num_blocks;
+    STATE_UNLOCK(s);
     return 0;
+
 }
 
 static struct nk_block_dev_int inter =
@@ -340,10 +474,14 @@ static void ata_device_addr_init(int devnum, void* dev)
 
     //We need to find bar4 though pci and then assign address of BMR
     //
+
     s->bar4 = s->pdev->cfg.dev_cfg.bars[4];
-    s->BMR_cmd = s->bar4;
-    s->BMR_status = s->bar4 + 2; 
-    s->BMR_prdt = s->bar4 + 4;
+    //DEBUG("BAR4 from structure is: %x\n", s->bar4);
+    //s->bar4 = pci_cfg_readl(s->bus->num, s->pdev->num, 0, 0x20);
+    //DEBUG("BAR4 from pci_read is: %x\n", s->bar4);
+    s->BMR_cmd = s->bar4 + s->channel*8;
+    s->BMR_status = s->BMR_cmd + 2; 
+    s->BMR_prdt = s->BMR_cmd + 4;
 
     s->prdt = (void*)malloc(sizeof(struct prdt));
     memset(s->prdt, 0, sizeof(struct prdt));
@@ -367,6 +505,8 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
     DEBUG("Considering device ata0-%d-%d\n",channel,id);
 
     spinlock_init(&s->lock); //do we really need this while booting
+    ata_device_addr_init(devnum, s);
+
     
     s->channel = channel;
     s->id = id;
@@ -447,6 +587,11 @@ static int discover_ata_drives(struct naut_info * naut)
         pci_command_reg |= (1 << 2);
     }
     pci_cfg_writel(bus->num, pdev->num, 0, 0x04, pci_command_reg);
+
+    DEBUG("BAR4 from structure is: %x\n", pdev->cfg.dev_cfg.bars[4]);
+    uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, 0, 0x20);
+    DEBUG("BAR4 from pci_read is: %x\n", bar4);
+
 
     //PCI staff ends, discover device 
     discover_device(0,0, bus, pdev);

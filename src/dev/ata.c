@@ -336,6 +336,8 @@ static int ata_lba48_read_write(struct ata_blkdev_state *s,
 	DEBUG("Handling block %lu\n",i);
 	for (j=0;j<256;j++) { //what does this 256 mean?
 	    uint16_t cur;
+	    uint8_t dstate = inb(CMDSTATUS(devnum));
+	    //DEBUG("ata status is: %x\n", dstate);
 	    if (write) { 
 		cur = *((uint16_t *)(srcdest+i*512+j*2));
 		// DEBUG("Writing 0x%04x\n", cur);
