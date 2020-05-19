@@ -153,8 +153,11 @@ static ata_error_t ata_wait(struct ata_blkdev_state *s, int data)
 
     while (1) {
         stat.val = inb(CMDSTATUS(devnum));
+        //DEBUG("In ata wait, the value of the status register is: %x\n", stat.val);
         if (stat.err) {
+	    int err = inb(s->error);
             ERROR("Controller error (0x%x)\n",stat.val);
+	    ERROR("The ERR Register is: %x\n", err);
             return ERR;
         }
         if (stat.df) {
@@ -324,10 +327,19 @@ static int ata_lba48_read_write_dma(void* state,
         return -1;
     }
 
+    while(1) {
+        int status = inb(s->BMR_status);
+        if (status & 0x4)
+            break;
+    }
+
     outb(0, s->BMR_cmd);
-    outb(0, s->BMR_status);
+    outb(0x66, s->BMR_status);
     outl((uint32_t)s->prdt_phys, s->BMR_prdt);
-    outb(0x40 | (s->id << 4), s->head);
+    DEBUG("The base address of the prdt for this transfer is: %x\n", s->prdt_phys);
+    DEBUG("The content of the first data in the prdt is: %x\n", *((uint32_t*)s->prdt_phys));
+    DEBUG("The content of the second data element in membuffer is: %c\n", ((char*)(*((uint32_t*)s->prdt_phys)))[1]);
+    outb(0xe0 | (s->id << 4) | lba[6] & 0xf0 >> 4, s->head);
     outb(lba[4],s->lba_lo);
     outb(lba[5],s->lba_mid);
     outb(lba[6],s->lba_high);
@@ -337,6 +349,16 @@ static int ata_lba48_read_write_dma(void* state,
     outb(lba[3],s->lba_high);
     
     DEBUG("LBA and sector count completed\n");
+
+    int status = inb(s->BMR_status); 
+    DEBUG("The BMR status before start is: %x\n", status);
+
+    //if(ata_wait(s,0)) {
+//	    ERROR("wait failed - resetting\n");
+//            ata_reset(s);
+ //           return -1;
+  //  }
+
 
     if (write) {
         memcpy(s->mem_buffer, buf, 512);
@@ -349,12 +371,14 @@ static int ata_lba48_read_write_dma(void* state,
     }
 
 
-    //polling and wait
-    if(ata_wait(s,1)) {
+
+    //polling and wait  // This will stuck the process if it is (s, 1)
+    if(ata_wait(s,0)) {
 	    ERROR("wait failed - resetting\n");
             ata_reset(s);
             return -1;
     }
+    DEBUG("Going into the whiole loop\n");
 
     while(1) {
         int status = inb(s->BMR_status);
@@ -363,12 +387,12 @@ static int ata_lba48_read_write_dma(void* state,
 	//    DEBUG("values = %c\n", ((char*)(uint64_t)s->prdt[0].buffer_phys)[i]);
 	//    //DEBUG("phys values = %c\n", s->)
 	//}
-        //DEBUG("BMR status = %x\n", status);
+        DEBUG("BMR status = %x\n", status);
 	if(!(status & 0x04)) {
 	    continue;
 	}
 
-	if (!(dstatus & 0x80)) {
+	if (!((dstatus & 0x80) && (dstatus & 0x08))) {
 	    break;
 	}
     }
@@ -475,8 +499,9 @@ static void ata_device_addr_init(int devnum, void* dev)
     //We need to find bar4 though pci and then assign address of BMR
     //
 
-    s->bar4 = s->pdev->cfg.dev_cfg.bars[4];
-    //DEBUG("BAR4 from structure is: %x\n", s->bar4);
+    //We seems to assign the correct bar4 to it, and the pdev seems correct
+    s->bar4 = s->pdev->cfg.dev_cfg.bars[4] & 0xfffffffc;// this is IO port
+    DEBUG("BAR4 from structure is: %x\n", s->bar4);
     //s->bar4 = pci_cfg_readl(s->bus->num, s->pdev->num, 0, 0x20);
     //DEBUG("BAR4 from pci_read is: %x\n", s->bar4);
     s->BMR_cmd = s->bar4 + s->channel*8;
@@ -489,6 +514,8 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->mem_buffer = (void*)malloc(4096);
     memset(s->mem_buffer, 0, 4096);
     s->prdt[0].buffer_phys = (uint32_t)s->mem_buffer;//we cast pointer to 32 bit
+    DEBUG("The mem_buffer address is %x\n", s->prdt[0].buffer_phys);
+    DEBUG("PRDT base address: %x assigned to drive %u\n", s->prdt_phys, devnum);
     s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
     s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
 
@@ -588,9 +615,14 @@ static int discover_ata_drives(struct naut_info * naut)
     }
     pci_cfg_writel(bus->num, pdev->num, 0, 0x04, pci_command_reg);
 
+
+    //Problem: This is the previous device, Why?
+
     DEBUG("BAR4 from structure is: %x\n", pdev->cfg.dev_cfg.bars[4]);
     uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, 0, 0x20);
     DEBUG("BAR4 from pci_read is: %x\n", bar4);
+    uint32_t class = pci_cfg_readl(bus->num, pdev->num, 0, 0x08);
+    DEBUG("Class and sub class double work is: 0x%x\n", class);
 
 
     //PCI staff ends, discover device 
