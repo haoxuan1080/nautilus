@@ -309,7 +309,15 @@ static int ata_lba48_read_write_dma(void* state,
 				    uint8_t *buf,
 				    int write)
 {
+    
+
     struct ata_blkdev_state *s = (struct ata_blkdev_state *) state;
+
+    DEBUG("s->BMR_cmd = %x\n", s->BMR_cmd);
+    DEBUG("s->BMR_status = %x\n", s->BMR_status);
+    DEBUG("s->BMR_prdt = %x\n", s->BMR_prdt);  //make sure nothing crashes the memory
+    DEBUG("prdt_phys = %p\n", s->prdt_phys);
+
 
     uint8_t sectcnt[2];
     uint8_t lba[7]; // we use 1..6 as per convention...
@@ -329,17 +337,33 @@ static int ata_lba48_read_write_dma(void* state,
 
     while(1) {
         int status = inb(s->BMR_status);
+	DEBUG("The BMR status before every thing is: 0x%x\n", status);
         if (status & 0x4)
             break;
     }
 
+    DEBUG("Write a 0x04 to BMR Status\n");
+    outb(0x4, s->BMR_status);
+    
+    inb(s->alt_status); // do this multiple times to consume 400ns
+    inb(s->alt_status); // do this multiple times to consume 400ns
+    inb(s->alt_status); // do this multiple times to consume 400ns
+    inb(s->alt_status); // do this multiple times to consume 400ns
+
+    int BMR_status = inb(s->BMR_status);
+    DEBUG("The status after writing 0x4 is: %x\n", BMR_status);
+
     outb(0, s->BMR_cmd);
-    outb(0x66, s->BMR_status);
-    outl((uint32_t)s->prdt_phys, s->BMR_prdt);
+    //outb(0x66, s->BMR_status);
+    //BMR_status = inb(s->BMR_status);
+    //DEBUG("The status after writing 0x66 is: %x\n", BMR_status);
+    outl((uint32_t)(uint64_t)s->prdt_phys, s->BMR_prdt);
     DEBUG("The base address of the prdt for this transfer is: %x\n", s->prdt_phys);
     DEBUG("The content of the first data in the prdt is: %x\n", *((uint32_t*)s->prdt_phys));
     DEBUG("The content of the second data element in membuffer is: %c\n", ((char*)(*((uint32_t*)s->prdt_phys)))[1]);
-    outb(0xe0 | (s->id << 4) | lba[6] & 0xf0 >> 4, s->head);
+    outb(0xe0 | (s->id << 4) | lba[6] & 0xf0 >> 4, s->head);//probably this selected the dirve, 
+    DEBUG("The head register is %x\n", inb(s->head));
+    outb(0,s->sector_count);
     outb(lba[4],s->lba_lo);
     outb(lba[5],s->lba_mid);
     outb(lba[6],s->lba_high);
@@ -362,7 +386,7 @@ static int ata_lba48_read_write_dma(void* state,
 
     if (write) {
         memcpy(s->mem_buffer, buf, 512);
-        outb(0x35, s->command);
+        outb(0x35, s->command);// maybe DMA first
         outb(0x1, s->BMR_cmd);
     }
     else {
@@ -370,14 +394,22 @@ static int ata_lba48_read_write_dma(void* state,
 	outb(0x8 | 0x1, s->BMR_cmd);
     }
 
+    DEBUG("drive status is %x\n", inb(s->status));
+DEBUG("drive status is %x\n", inb(s->status));
+DEBUG("drive status is %x\n", inb(s->status));
+DEBUG("drive status is %x\n", inb(s->status));
+DEBUG("drive status is %x\n", inb(s->status));
+
+    DEBUG("BMR cmd is %x\n", inb(s->BMR_cmd));
+
 
 
     //polling and wait  // This will stuck the process if it is (s, 1)
-    if(ata_wait(s,0)) {
-	    ERROR("wait failed - resetting\n");
-            ata_reset(s);
-            return -1;
-    }
+    //if(ata_wait(s,0)) {
+//	    ERROR("wait failed - resetting\n");
+//            ata_reset(s);
+ //           return -1;
+   // }
     DEBUG("Going into the whiole loop\n");
 
     while(1) {
@@ -388,11 +420,12 @@ static int ata_lba48_read_write_dma(void* state,
 	//    //DEBUG("phys values = %c\n", s->)
 	//}
         DEBUG("BMR status = %x\n", status);
-	if(!(status & 0x04)) {
+	DEBUG("Drive status = %x\n", dstatus);
+	if((status & 0x01)) { //previous if statement is if(!(status & 0x4))
 	    continue;
 	}
 
-	if (!((dstatus & 0x80) && (dstatus & 0x08))) {
+	if (!((dstatus & 0x80) || (dstatus & 0x08))) {
 	    break;
 	}
     }
@@ -436,6 +469,7 @@ static int write_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t 
 {
     STATE_LOCK_CONF;
     struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+    DEBUG("\n\n\n--------------------------------------------------------\n");
     DEBUG("write_blocks on device %s starting at %lu for %lu blocks\n",
           s->blkdev->dev.name, blocknum, count);
     STATE_LOCK(s);
@@ -514,6 +548,7 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->mem_buffer = (void*)malloc(4096);
     memset(s->mem_buffer, 0, 4096);
     s->prdt[0].buffer_phys = (uint32_t)s->mem_buffer;//we cast pointer to 32 bit
+    DEBUG("");
     DEBUG("The mem_buffer address is %x\n", s->prdt[0].buffer_phys);
     DEBUG("PRDT base address: %x assigned to drive %u\n", s->prdt_phys, devnum);
     s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
