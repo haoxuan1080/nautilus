@@ -22,13 +22,16 @@
 #define STATE_LOCK(state) _state_lock_flags = spin_lock_irq_save(&state->lock)
 #define STATE_UNLOCK(state) spin_unlock_irq_restore(&(state->lock), _state_lock_flags)
 
-struct prdt {
+union prdt {
+	uint64_t val;
+	struct {
 	uint32_t buffer_phys;
 	uint16_t transfer_size;
 	uint16_t mark_end;
+	} __attribute__((packed));
 }__attribute__((packed));
 
-typedef struct prdt* prdt_t;
+typedef union prdt* prdt_t;
 
 struct ata_blkdev_state {
     struct nk_block_dev *blkdev;
@@ -377,6 +380,18 @@ static int ata_lba48_read_write_dma(void* state,
     int status = inb(s->BMR_status); 
     DEBUG("The BMR status before start is: %x\n", status);
 
+    char* p = inl(s->BMR_prdt);
+    *(uint64_t*) p = 0x8000020000106001UL;
+    DEBUG("BMR_prdt = %p\n", p);
+    //nk_dump_mem(p, 32);
+    for (int i = 0; i < 32; i++) {
+        printk("%02x", p[i]);
+    }
+    printk("\n");
+    DEBUG("BMR prdt_phys is %p\n", s->prdt_phys);
+
+
+    
     //if(ata_wait(s,0)) {
 //	    ERROR("wait failed - resetting\n");
 //            ata_reset(s);
@@ -515,6 +530,8 @@ static struct nk_block_dev_int inter =
     .write_blocks = write_blocks,
 };
 
+union prdt prdt_glb[65536];
+
 static void ata_device_addr_init(int devnum, void* dev)
 {
     struct ata_blkdev_state *s = (struct ata_blkdev_state *) dev;
@@ -542,17 +559,20 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->BMR_status = s->BMR_cmd + 2; 
     s->BMR_prdt = s->BMR_cmd + 4;
 
-    s->prdt = (void*)malloc(sizeof(struct prdt));
-    memset(s->prdt, 0, sizeof(struct prdt));
+    //s->prdt = (void*)malloc(4*sizeof(*(s->prdt)));
+    //memset(s->prdt, 0, 4*sizeof(*(s->prdt)));
+    s->prdt = &prdt_glb[0];
     s->prdt_phys = (uint8_t*)s->prdt;// this actually virtual address 
     s->mem_buffer = (void*)malloc(4096);
     memset(s->mem_buffer, 0, 4096);
     s->prdt[0].buffer_phys = (uint32_t)s->mem_buffer;//we cast pointer to 32 bit
+    DEBUG("The lowest byte in prdt[0] is %x\n", *(char*)s->prdt[0].buffer_phys);
     DEBUG("");
     DEBUG("The mem_buffer address is %x\n", s->prdt[0].buffer_phys);
     DEBUG("PRDT base address: %x assigned to drive %u\n", s->prdt_phys, devnum);
     s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
-    s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
+    //s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
+    s->prdt[0].val |= 0x8000000000000000UL;
 
 }
 
