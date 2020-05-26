@@ -649,6 +649,8 @@ static int discover_ata_drives(struct naut_info * naut)
 
         list_for_each(curdev, &(bus->dev_list)) {
             pdev = list_entry(curdev,struct pci_dev,dev_node);
+	    DEBUG("Bus num is: %x\n", bus->num);
+	    DEBUG("pdev num is: %x\n", pdev->num);
             struct pci_cfg_space *cfg = &pdev->cfg;
 	    DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
 	    if (cfg->class_code == 0x01 && cfg->subclass == 0x01){
@@ -664,20 +666,20 @@ static int discover_ata_drives(struct naut_info * naut)
 
     }
 
-    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, 0, 0x04);
+    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x04);
     if(!(pci_command_reg & (1 << 2))) {
         pci_command_reg |= (1 << 2);
     }
-    pci_cfg_writel(bus->num, pdev->num, 0, 0x04, pci_command_reg);
+    pci_cfg_writel(bus->num, pdev->num, pdev->fun, 0x04, pci_command_reg);
 
 
     //Problem: This is the previous device, Why?
 
     DEBUG("BAR4 from structure is: %x\n", pdev->cfg.dev_cfg.bars[4]);
-    uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, 0, 0x20);
+    uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x20);
     DEBUG("BAR4 from pci_read is: %x\n", bar4);
-    uint32_t class = pci_cfg_readl(bus->num, pdev->num, 0, 0x08);
-    DEBUG("Class and sub class double work is: 0x%x\n", class);
+    uint32_t class = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x08);
+    DEBUG("Class and sub class double word is: 0x%x\n", class);
 
 
     //PCI staff ends, discover device 

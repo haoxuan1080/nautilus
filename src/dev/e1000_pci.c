@@ -779,6 +779,8 @@ int e1000_pci_init(struct naut_info * naut)
       struct pci_cfg_space *cfg = &pdev->cfg;
 
       DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
+      DEBUG("Class code is %x\n", cfg->class_code);
+      DEBUG("SubClass code is %x\n", cfg->subclass);
       // intel vendor id and e1000 device id
       if (cfg->vendor_id==INTEL_VENDOR_ID && cfg->device_id==E1000_DEVICE_ID) {
         DEBUG("E1000 Device Found\n");
