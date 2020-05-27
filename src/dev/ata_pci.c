@@ -447,6 +447,12 @@ DEBUG("drive status is %x\n", inb(s->status));
 
     if (!write) {
         memcpy(buf, s->mem_buffer, 512);
+	for (int i = 0; i < 512; i++) {
+	    printk("%c", buf[i]);
+	    if (i%64 == 0) {
+	        printk("\n");
+	    }
+	}
     }
 
     return 0;
@@ -530,7 +536,7 @@ static struct nk_block_dev_int inter =
     .write_blocks = write_blocks,
 };
 
-union prdt prdt_glb[65536];
+//union prdt prdt_glb[65536];
 
 static void ata_device_addr_init(int devnum, void* dev)
 {
@@ -559,9 +565,9 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->BMR_status = s->BMR_cmd + 2; 
     s->BMR_prdt = s->BMR_cmd + 4;
 
-    //s->prdt = (void*)malloc(4*sizeof(*(s->prdt)));
-    //memset(s->prdt, 0, 4*sizeof(*(s->prdt)));
-    s->prdt = &prdt_glb[0];
+    s->prdt = (void*)malloc(4*sizeof(*(s->prdt)));
+    memset(s->prdt, 0, 4*sizeof(*(s->prdt)));
+    //s->prdt = &prdt_glb[0];
     s->prdt_phys = (uint8_t*)s->prdt;// this actually virtual address 
     s->mem_buffer = (void*)malloc(4096);
     memset(s->mem_buffer, 0, 4096);
@@ -571,8 +577,8 @@ static void ata_device_addr_init(int devnum, void* dev)
     DEBUG("The mem_buffer address is %x\n", s->prdt[0].buffer_phys);
     DEBUG("PRDT base address: %x assigned to drive %u\n", s->prdt_phys, devnum);
     s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
-    //s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
-    s->prdt[0].val |= 0x8000000000000000UL;
+    s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
+    //s->prdt[0].val |= 0x8000000000000000UL;
 
 }
 
