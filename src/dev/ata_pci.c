@@ -138,7 +138,7 @@ typedef union ata_cmd_reg {
 } __packed ata_cmd_reg_t;
 
 // We are still using legacy controller
-static struct ata_controller_state controller;
+//static struct ata_controller_state controller;
 
 typedef enum {OK=0, ERR, DF} ata_error_t;
 
@@ -155,7 +155,7 @@ static ata_error_t ata_wait(struct ata_blkdev_state *s, int data)
     DEBUG("Waiting on drive %u for %s\n",devnum,data ? "data" : "command");
 
     while (1) {
-        stat.val = inb(CMDSTATUS(devnum));
+        stat.val = inb(s->status);
         //DEBUG("In ata wait, the value of the status register is: %x\n", stat.val);
         if (stat.err) {
 	    int err = inb(s->error);
@@ -185,11 +185,11 @@ static int ata_reset(struct ata_blkdev_state *s)
     c.ien=1; // disable interrupts
     c.srst=1; // start resetting
 
-    outb(c.val,CMDSTATUS(devnum));
+    outb(c.val,s->status);
     //We placed 4 read insturctions here, delay but didn't changed the detected device number 
     c.srst=0; // stop resetting
 
-    outb(c.val,CMDSTATUS(devnum));
+    outb(c.val,s->status);
 
     return 0;
 }
@@ -201,15 +201,15 @@ static int ata_drive_select(struct ata_blkdev_state *s)
 
     DEBUG("Drive select %u\n",devnum);
 
-    outb(0xa0 | s->id << 4, DRIVEHEAD(devnum));
-    inb(ALTCMDSTATUS(devnum)); // do this multiple times to consume 400ns
-    inb(ALTCMDSTATUS(devnum)); // do we have to do this in initialization?
-    inb(ALTCMDSTATUS(devnum));
-    inb(ALTCMDSTATUS(devnum));
-    inb(ALTCMDSTATUS(devnum)); // do this multiple times to consume 400ns
-    inb(ALTCMDSTATUS(devnum)); // do we have to do this in initialization?
-    inb(ALTCMDSTATUS(devnum));
-    inb(ALTCMDSTATUS(devnum));
+    outb(0xa0 | s->id << 4, s->head);
+    inb(s->alt_status); // do this multiple times to consume 400ns
+    inb(s->alt_status); // do we have to do this in initialization?
+    inb(s->alt_status);
+    inb(s->alt_status);
+    inb(s->alt_status); // do this multiple times to consume 400ns
+    inb(s->alt_status); // do we have to do this in initialization?
+    inb(s->alt_status);
+    inb(s->alt_status);
 
     return 0;
 }
@@ -223,8 +223,8 @@ static int ata_drive_detect(struct ata_blkdev_state *s)
 
     ata_reset(s);
     ata_drive_select(s);
-    t  = inb(LBAMID(devnum));
-    t |= ((uint16_t)inb(LBAHI(devnum)))<<8;
+    t  = inb(s->lba_mid);
+    t |= ((uint16_t)inb(s->lba_high))<<8;
 
     DEBUG("drive reports type 0x%x\n",t);
 
@@ -258,7 +258,7 @@ static int ata_drive_identify(struct ata_blkdev_state *s)
     outb(0, s->lba_high);
     outb(0xec, s->command); // IDENTIFY
 
-    if (!inb(CMDSTATUS(devnum))) {
+    if (!inb(s->status)) {
         // nonexistent drive... why am I identifying it?
 	// Why could we detect something but it is identified as noexistent?
         DEBUG("Drive is nonexistent\n");
@@ -270,7 +270,7 @@ static int ata_drive_identify(struct ata_blkdev_state *s)
         return -1;
     }
 
-    if (inb(LBAMID(devnum)) || inb(LBAHI(devnum))) {
+    if (inb(s->lba_mid) || inb(s->lba_high)) {
         ERROR("Not an ATA drive or a flakey ATAPI drive\n");
         return -1;
     }
@@ -541,7 +541,26 @@ static struct nk_block_dev_int inter =
 static void ata_device_addr_init(int devnum, void* dev)
 {
     struct ata_blkdev_state *s = (struct ata_blkdev_state *) dev;
-    s->data = DATA(devnum);
+    //tell whether the drive is legacy mode
+    int base = 0;
+    int basectrl = 0;
+    if (s->channel == 0) { //primary channel
+        base = s->pdev->cfg.dev_cfg.bars[0];
+        basectrl = s->pdev->cfg.dev_cfg.bars[1];
+    }
+    else if (s->channel == 1) { //secondary channel
+        base = s->pdev->cfg.dev_cfg.bars[2];
+	basectrl = s->pdev->cfg.dev_cfg.bars[3];
+    }
+    else {
+        panic("The channel number is wrong\n");
+    }
+    if (base == 0x1 || base == 0x0) { //legacy mode
+        s->data = DATA(devnum);
+    }
+    else { //PCI native mode
+        s->data = base & 0xfffffffc;
+    }
     s->error = s->data+1;
     s->sector_count = s->data + 2;
     s->lba_lo = s->data + 3;
@@ -549,9 +568,12 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->lba_high = s->data + 5;
     s->head = s->data + 6;
     s->command = s->data + 7;
-    s->control = ALTCMDSTATUS(devnum);
-
-
+    if (basectrl == 0x1 || 0x0) { //legacy mode
+        s->control = ALTCMDSTATUS(devnum);
+    }
+    else {
+        s->control = basectrl & 0xfffffffc;
+    }
 
     //We need to find bar4 though pci and then assign address of BMR
     //
@@ -582,10 +604,10 @@ static void ata_device_addr_init(int devnum, void* dev)
 
 }
 
-static void discover_device(int channel, int id, struct pci_bus *bus, struct pci_dev *pdev)
+static void discover_device(struct ata_controller_state* ctrl, int channel, int id, struct pci_bus *bus, struct pci_dev *pdev)
 {
     int devnum = channel*2 + id;
-    struct ata_blkdev_state *s = &(controller.devices[devnum]);
+    struct ata_blkdev_state *s = &(ctrl->devices[devnum]);
 
     s->bus = bus;
     s->pdev = pdev;
@@ -598,7 +620,7 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
     
     s->channel = channel;
     s->id = id;
-    s->controller = &controller;
+    s->controller = ctrl;
 
     ata_drive_detect(s);
 
@@ -625,11 +647,19 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
 
 }
 
+static int discover_controller(struct ata_controller_state* ctrl, struct pci_bus *bus, struct pci_dev *pdev)
+{
+    discover_device(ctrl,0,0, bus, pdev);
+    discover_device(ctrl,0,1, bus, pdev);
+    discover_device(ctrl,1,0, bus, pdev);
+    discover_device(ctrl,1,1, bus, pdev);
+}
+
 
 
 static int discover_ata_drives(struct naut_info * naut)
 {
-    memset((void*)&controller,0,sizeof(controller));
+    //memset((void*)&controller,0,sizeof(controller));
 
     struct pci_info *pci = naut->sys.pci;
     struct list_head *curbus, *curdev;
@@ -660,40 +690,43 @@ static int discover_ata_drives(struct naut_info * naut)
             struct pci_cfg_space *cfg = &pdev->cfg;
 	    DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
 	    if (cfg->class_code == 0x01 && cfg->subclass == 0x01){
+		    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x04);
+		    if(!(pci_command_reg & (1 << 2))) {
+			pci_command_reg |= (1 << 2);
+		    }
+		    pci_cfg_writel(bus->num, pdev->num, pdev->fun, 0x04, pci_command_reg);
+
+
+		    //Problem: This is the previous device, Why?
+
+		    DEBUG("BAR4 from structure is: %x\n", pdev->cfg.dev_cfg.bars[4]);
+		    uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x20);
+		    DEBUG("BAR4 from pci_read is: %x\n", bar4);
+		    uint32_t class = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x08);
+		    DEBUG("Class and sub class double word is: 0x%x\n", class);
+
+		    struct ata_controller_state* ctrl = malloc(sizeof(struct ata_controller_state));
+                    memset((void*)ctrl,0,sizeof(*ctrl));
 		    DEBUG("IDE Device Found\n");
-		    break;
+		    DEBUG("Assigning controller to the device!\n");
+		    discover_controller(ctrl, bus, pdev);
+
+
+		    //DEBUG("IDE Device Found\n");
+		    //break;
 	    }
             
         }
-            if (pdev->cfg.class_code == 0x01 && pdev->cfg.subclass == 0x01){
-		    DEBUG("IDE Device Found\n");
-		    break;
-	    }
+            //if (pdev->cfg.class_code == 0x01 && pdev->cfg.subclass == 0x01){
+	//	    DEBUG("IDE Device Found\n");
+	//	    break;
+	  //  }
 
     }
 
-    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x04);
-    if(!(pci_command_reg & (1 << 2))) {
-        pci_command_reg |= (1 << 2);
-    }
-    pci_cfg_writel(bus->num, pdev->num, pdev->fun, 0x04, pci_command_reg);
-
-
-    //Problem: This is the previous device, Why?
-
-    DEBUG("BAR4 from structure is: %x\n", pdev->cfg.dev_cfg.bars[4]);
-    uint32_t bar4 = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x20);
-    DEBUG("BAR4 from pci_read is: %x\n", bar4);
-    uint32_t class = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x08);
-    DEBUG("Class and sub class double word is: 0x%x\n", class);
-
+    
 
     //PCI staff ends, discover device 
-    discover_device(0,0, bus, pdev);
-    discover_device(0,1, bus, pdev);
-    discover_device(1,0, bus, pdev);
-    discover_device(1,1, bus, pdev);
-
     return 0;
 }
 
