@@ -338,12 +338,13 @@ static int ata_lba48_read_write_dma(void* state,
         return -1;
     }
 
-    while(1) {
-        int status = inb(s->BMR_status);
-	DEBUG("The BMR status before every thing is: 0x%x\n", status);
-        if (status & 0x4)
-            break;
-    }
+    //deleted this for ahci, why?
+    //while(1) {
+    //    int status = inb(s->BMR_status);
+//	DEBUG("The BMR status before every thing is: 0x%x\n", status);
+ //       if (status & 0x4)
+   //         break;
+    //}
 
     DEBUG("Write a 0x04 to BMR Status\n");
     outb(0x4, s->BMR_status);
@@ -612,7 +613,7 @@ static void discover_device(struct ata_controller_state* ctrl, int channel, int 
     s->bus = bus;
     s->pdev = pdev;
 
-    DEBUG("Considering device ata0-%d-%d\n",channel,id);
+    DEBUG("Considering device ata%d-%d-%d-%d\n",bus->num,pdev->num,channel,id);
 
     spinlock_init(&s->lock); //do we really need this while booting
     ata_device_addr_init(devnum, s);
@@ -624,12 +625,12 @@ static void discover_device(struct ata_controller_state* ctrl, int channel, int 
 
     ata_drive_detect(s);
 
-    INFO("finished drive_detect for device ata0-%d-%d\n",channel,id);
+    INFO("finished drive_detect for device ata%d-%d-%d-%d\n",bus->num,pdev->num,channel,id);
 
     if (s->type!=NONE) {
         if (!ata_drive_identify(s)) {
             char name[32];
-            sprintf(name,"ata0-%d-%d",channel,id);
+            sprintf(name,"ata%d-%d-%d-%d",bus->num,pdev->num,channel,id);
             s->blkdev = nk_block_dev_register(name, 0, &inter, s);
             if (!s->blkdev) {
                 ERROR("Failed to register %s\n",name);
@@ -689,7 +690,7 @@ static int discover_ata_drives(struct naut_info * naut)
 	    DEBUG("pdev num is: %x\n", pdev->num);
             struct pci_cfg_space *cfg = &pdev->cfg;
 	    DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
-	    if (cfg->class_code == 0x01 && cfg->subclass == 0x01){
+	    if (cfg->class_code == 0x01 && (cfg->subclass == 0x01 ||cfg->subclass == 0x6)){
 		    uint32_t pci_command_reg = pci_cfg_readl(bus->num, pdev->num, pdev->fun, 0x04);
 		    if(!(pci_command_reg & (1 << 2))) {
 			pci_command_reg |= (1 << 2);
@@ -707,7 +708,10 @@ static int discover_ata_drives(struct naut_info * naut)
 
 		    struct ata_controller_state* ctrl = malloc(sizeof(struct ata_controller_state));
                     memset((void*)ctrl,0,sizeof(*ctrl));
-		    DEBUG("IDE Device Found\n");
+		    if (cfg->subclass == 0x1)
+		        DEBUG("IDE Device Found\n");
+		    else 
+			DEBUG("SATA Device Found\n");
 		    DEBUG("Assigning controller to the device!\n");
 		    discover_controller(ctrl, bus, pdev);
 

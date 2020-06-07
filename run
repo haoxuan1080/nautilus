@@ -1,4 +1,27 @@
-make -j  isoimage && qemu-system-x86_64 -smp 1 -m 2048 -vga std -serial stdio -cdrom nautilus.iso -hda hda.img -hdb hda1.img #-hdc hda2.img -hdd hda3.img 
+make -j  isoimage && qemu-system-x86_64 -smp 1 -m 2048 -vga std -serial stdio -cdrom nautilus.iso -hda hda.img -hdb hda1.img \
+ -drive id=disk,file=hda3.img,if=none \
+ -device piix4-ide,id=piix4-ide \
+ -device ide-hd,drive=disk,bus=piix4-ide.0
+
+#-drive id=disk1,file=hda3.img,if=none
+#-device ide-hd,drive=disk1
+
+#-drive id=disk1,file=hda3.img,if=none \
+#-device ide-hd,drive=disk1,bus=/i440FX-pcihost/pci.0,addr=4
+#Device 'ide-hd' can't go on PCI bus
+
+#-drive id=disk1,file=hda3.img,if=none \
+#-device virtio-blk-pci,drive=disk1
+
+# -drive id=disk,file=hda3.img,if=none \
+# -device ahci,id=ahci \
+# -device ide-hd,drive=disk,bus=ahci.0
+
+#-drive id=pci_disk,file=hda3.img,if=none \
+#-device achi,drive=pci_disk,bus=/i440FX-pcihost/pci.0,addr=4
+#-drive id=pci_disk,file=hda3.img,if=none \
+#-device ide-drive,drive=pci_disk
+
 
 #-drive id=disk1,file=hda4.img,if=none -device ide-hd,drive=disk1
 
