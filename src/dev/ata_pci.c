@@ -8,6 +8,7 @@
 #include <nautilus/mm.h>
 #include <nautilus/naut_string.h>
 #include <nautilus/cpu.h> //We don't know whether we need it?
+#include <nautilus/irq.h> 
 //#ifndef NAUT_CONFIG_DEBUG_ATA_PCI
 //#undef DEBUG_PRINT
 //#define DEBUG_PRINT(fmt, args...)
@@ -32,6 +33,20 @@ union prdt {
 }__attribute__((packed));
 
 typedef union prdt* prdt_t;
+
+struct ata_fn_map {
+	void (*callback) (nk_block_dev_status_t, void *);
+	uint64_t *context;
+	uint64_t *buf;
+};
+
+struct ata_map_ring {
+	struct ata_fn_map *map_ring;
+	uint64_t head_pos;
+	uint64_t tail_pos;
+	uint64_t ring_len;
+};
+
 
 struct ata_blkdev_state {
     struct nk_block_dev *blkdev;
@@ -89,7 +104,21 @@ struct ata_blkdev_state {
     uint64_t            num_blocks;
     uint8_t             channel; // 0/1 on controller (primary/secondary)
     uint8_t             id;      // 0/1 on channel (master/slave)
+    
+    //add interrupt variables
+    uint8_t pci_intr;
+    uint8_t intr_vec;
+    uint8_t intr_flag;
+    uint8_t* source;
+    uint8_t* dest;
+
+    struct ata_map_ring *tx_map;
+    struct ata_map_ring *rx_map;
+
 };
+
+uint8_t* source_global;
+uint8_t* dest_global;
 
 struct ata_controller_state {
     // devices 0,1 are master/slave on primary
@@ -97,7 +126,9 @@ struct ata_controller_state {
     struct ata_blkdev_state devices[4];
 };
 
-
+//Map ring length declaration constant
+#define TX_DSC_COUNT 128
+#define RX_DSC_COUNT 128
 
 #define LEGACY_BUS_IOSTART(devnum) (((devnum)<2) ? 0x1f0 : 0x170)
 #define LEGACY_ALT_IOSTART(devnum) (((devnum)<2) ? 0x3f6 : 0x376)
@@ -240,7 +271,7 @@ static int ata_drive_detect(struct ata_blkdev_state *s)
          t==0xeb14 ? "PATAPI" : t==0x9669 ? "SATAPI" :
          t==0x0 ? "PATA" : t==0xc33c ? "SATA" : "UNKNOWN");
 
-    return 0;
+   return 0;
 }
 
 static int ata_drive_identify(struct ata_blkdev_state *s)
@@ -338,13 +369,13 @@ static int ata_lba48_read_write_dma(void* state,
         return -1;
     }
 
-    while(1) {
+   /* while(1) {
         int status = inb(s->BMR_status);
 	DEBUG("The BMR status before every thing is: 0x%x\n", status);
         if (status & 0x4)
             break;
-    }
-
+    } 
+   */
     DEBUG("Write a 0x04 to BMR Status\n");
     outb(0x4, s->BMR_status);
     
@@ -361,9 +392,9 @@ static int ata_lba48_read_write_dma(void* state,
     //BMR_status = inb(s->BMR_status);
     //DEBUG("The status after writing 0x66 is: %x\n", BMR_status);
     outl((uint32_t)(uint64_t)s->prdt_phys, s->BMR_prdt);
-    DEBUG("The base address of the prdt for this transfer is: %x\n", s->prdt_phys);
-    DEBUG("The content of the first data in the prdt is: %x\n", *((uint32_t*)s->prdt_phys));
-    DEBUG("The content of the second data element in membuffer is: %c\n", ((char*)(*((uint32_t*)s->prdt_phys)))[1]);
+ //   DEBUG("The base address of the prdt for this transfer is: %x\n", s->prdt_phys);
+ //   DEBUG("The content of the first data in the prdt is: %x\n", *((uint32_t*)s->prdt_phys));
+ //   DEBUG("The content of the second data element in membuffer is: %c\n", ((char*)(*((uint32_t*)s->prdt_phys)))[1]);
     outb(0xe0 | (s->id << 4) | lba[6] & 0xf0 >> 4, s->head);//probably this selected the dirve, 
     DEBUG("The head register is %x\n", inb(s->head));
     outb(0,s->sector_count);
@@ -378,8 +409,8 @@ static int ata_lba48_read_write_dma(void* state,
     DEBUG("LBA and sector count completed\n");
 
     int status = inb(s->BMR_status); 
-    DEBUG("The BMR status before start is: %x\n", status);
-
+ //   DEBUG("The BMR status before start is: %x\n", status);
+/*
     char* p = inl(s->BMR_prdt);
     *(uint64_t*) p = 0x8000020000106001UL;
     DEBUG("BMR_prdt = %p\n", p);
@@ -388,8 +419,8 @@ static int ata_lba48_read_write_dma(void* state,
         printk("%02x", p[i]);
     }
     printk("\n");
-    DEBUG("BMR prdt_phys is %p\n", s->prdt_phys);
-
+   DEBUG("BMR prdt_phys is %p\n", s->prdt_phys);
+*/
 
     
     //if(ata_wait(s,0)) {
@@ -398,6 +429,7 @@ static int ata_lba48_read_write_dma(void* state,
  //           return -1;
   //  }
 
+    //s->intr_flag = 1;
 
     if (write) {
         memcpy(s->mem_buffer, buf, 512);
@@ -410,10 +442,10 @@ static int ata_lba48_read_write_dma(void* state,
     }
 
     DEBUG("drive status is %x\n", inb(s->status));
-DEBUG("drive status is %x\n", inb(s->status));
-DEBUG("drive status is %x\n", inb(s->status));
-DEBUG("drive status is %x\n", inb(s->status));
-DEBUG("drive status is %x\n", inb(s->status));
+    DEBUG("BMR status is %x\n", inb(s->BMR_status));
+/*  DEBUG("drive status is %x\n", inb(s->status));
+    DEBUG("BMR status is %x\n", inb(s->BMR_status));
+    DEBUG("drive status is %x\n", inb(s->status));
 
     DEBUG("BMR cmd is %x\n", inb(s->BMR_cmd));
 
@@ -425,7 +457,7 @@ DEBUG("drive status is %x\n", inb(s->status));
 //            ata_reset(s);
  //           return -1;
    // }
-    DEBUG("Going into the whiole loop\n");
+    DEBUG("Going into the while loop\n");
 
     while(1) {
         int status = inb(s->BMR_status);
@@ -436,6 +468,7 @@ DEBUG("drive status is %x\n", inb(s->status));
 	//}
         DEBUG("BMR status = %x\n", status);
 	DEBUG("Drive status = %x\n", dstatus);
+	DEBUG("interrupt pin is %x\n",s->pdev->cfg.dev_cfg.intr_pin);
 	if((status & 0x01)) { //previous if statement is if(!(status & 0x4))
 	    continue;
 	}
@@ -445,22 +478,78 @@ DEBUG("drive status is %x\n", inb(s->status));
 	}
     }
 
+//	DEBUG("%x\n",)
     if (!write) {
         memcpy(buf, s->mem_buffer, 512);
 	for (int i = 0; i < 512; i++) {
 	    printk("%c", buf[i]);
 	    if (i%64 == 0) {
 	        printk("\n");
-	    }
+	  	}
+	   }
 	}
-    }
-
+*/
     return 0;
 }
 
+static int ata_unmap_callback(struct ata_map_ring* map,
+                                uint64_t** callback,
+                                void** context, void** buf)
+{
+  // callback is a function pointer
+  DEBUG("unmap callback fn head_pos %d tail_pos %d\n", map->head_pos, map->tail_pos);
+  if(map->head_pos == map->tail_pos) {
+    // if there is an empty mapping ring buffer, do not unmap the callback
+    ERROR("Try to unmap an empty queue\n");
+    return -1;
+  }
+
+// WHY DO WE NEED TO USE HEAD POS*******
+  uint64_t i = map->head_pos;
+  // TODO(panitan)
+  // uint64_t i = map->tail_pos-1;
+  DEBUG("the map_callback in unmap is 0x%p\n",map->map_ring[i].callback);
+  *callback = (uint64_t *) map->map_ring[i].callback;
+  *context =  map->map_ring[i].context;
+  *buf = map->map_ring[i].buf;
+  map->map_ring[i].callback = NULL;
+  map->map_ring[i].context = NULL;
+  map->map_ring[i].buf = NULL;
+  map->head_pos = (1 + map->head_pos) % map->ring_len;
+  DEBUG("end unmap callback fn head_pos %d tail_pos %d\n", map->head_pos, map->tail_pos);
+  return 0;
+}
+
+static int ata_map_callback(struct ata_map_ring* map,
+                              void (*callback)(nk_block_dev_status_t, void*),
+                              void* context,void* buf)
+{
+  DEBUG("map callback head_pos %d tail_pos %d\n", map->head_pos, map->tail_pos);
+  DEBUG("the ring_len is %d\n",map->ring_len);
+  if(map->head_pos == ((map->tail_pos + 1) % map->ring_len)) {
+    // when the mapping callback queue is full
+    DEBUG("im here!!!\n");
+    ERROR("Callback mapping queue is full.\n");
+    return -1;
+  }
+  DEBUG("tail_pos %d\n", map->tail_pos);
+  uint64_t i = map->tail_pos;
+  struct ata_fn_map* fnmap = (map->map_ring + i);
+   DEBUG("im here!!!_2\n");
+   fnmap->callback = callback;
+   DEBUG("im here!!!_2.5\n");
+   fnmap->context = (uint64_t *)context;
+   DEBUG("im here!!!_3\n");
+   fnmap->buf = (uint64_t *) buf;
+  map->tail_pos = (1 + map->tail_pos) % map->ring_len;
+  DEBUG("mapped callback head_pos: %d, tail_pos: %d\n", map->head_pos, map->tail_pos);
+  return 0;
+}
+
+
 static int read_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *dest,void (*callback)(nk_block_dev_status_t, void *), void *context)
 {
-    STATE_LOCK_CONF;
+/*    STATE_LOCK_CONF;
     struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
     DEBUG("read_blocks on device %s starting at %lu for %lu blocks\n",
           s->blkdev->dev.name, blocknum, count);
@@ -471,6 +560,7 @@ static int read_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *
         return -1;
     } else {
         int rc =0;
+	DEBUG("The count value for dest is %d\n",count);
 	for (int i = 0; i<count; i++) {
 	    DEBUG("read on device %s block num %u\n", s->blkdev->dev.name, i);
 
@@ -482,38 +572,85 @@ static int read_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *
             callback(NK_BLOCK_DEV_STATUS_SUCCESS,context);
         }
         return rc;
-    }
+    } */
+struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+    DEBUG("the head_pos_tx_1 is %x\n",s->tx_map->head_pos);
+    DEBUG("the head_pos_rx_1 is %x\n",s->rx_map->head_pos);
 
+    DEBUG("\n\n\n--------------------------------------------------------\n");
+    DEBUG("read_blocks on device %s starting at %lu for %lu blocks\n",
+          s->blkdev->dev.name, blocknum, count);
+    //STATE_LOCK(s);
+    if (blocknum+count >= s->num_blocks) {
+    //    STATE_UNLOCK(s);
+        ERROR("Illegal access past end of disk\n");
+        return -1;
+    }
+    int rc =0;
+    //Always map callback
+    DEBUG("read the ata call back 0x%p\n",callback);
+
+    rc = ata_map_callback(((struct ata_blkdev_state*)state)->rx_map,callback,context,dest);
+    //STATE_LOCK(s);
+    if (!rc) {
+    rc += ata_lba48_read_write_dma(s,blocknum,dest,0);
+    }
+    DEBUG("mapped callback in write_blocks head_pos: %d, tail_pos: %d\n", s->tx_map->head_pos, s->tx_map->tail_pos);
+
+    return rc;
 }
 
 static int write_blocks(void *state, uint64_t blocknum, uint64_t count, uint8_t *src,void (*callback)(nk_block_dev_status_t, void *), void *context)
 {
-    STATE_LOCK_CONF;
+   // DEBUG("the head_pos_tx_1 is %x\n",s->tx_map->head_pos);
+   // DEBUG("the head_pos_rx_1 is %x\n",s->rx_map->head_pos);
+
+  //  STATE_LOCK_CONF;
     struct ata_blkdev_state *s = (struct ata_blkdev_state *)state;
+    DEBUG("the head_pos_tx_1 is %x\n",s->tx_map->head_pos);
+    DEBUG("the head_pos_rx_1 is %x\n",s->rx_map->head_pos);
+
     DEBUG("\n\n\n--------------------------------------------------------\n");
     DEBUG("write_blocks on device %s starting at %lu for %lu blocks\n",
           s->blkdev->dev.name, blocknum, count);
-    STATE_LOCK(s);
+    //STATE_LOCK(s);
     if (blocknum+count >= s->num_blocks) {
-        STATE_UNLOCK(s);
+    //    STATE_UNLOCK(s);
         ERROR("Illegal access past end of disk\n");
         return -1;
-    } else {
+    }
+    int rc =0;
+    //Always map callback
+    DEBUG("read the ata call back 0x%p\n",callback);
+
+    rc = ata_map_callback(((struct ata_blkdev_state*)state)->tx_map,callback,context, src);
+    //STATE_LOCK(s);
+    if (!rc) {
+    rc += ata_lba48_read_write_dma(s,blocknum,src,1);
+    }
+    DEBUG("End of the read function\n");
+
+  /*
+    else {
         int rc =0;
+	DEBUG("the count value is %d\n",count);
         for (int i = 0; i<count; i++) {
-            
+            source_global = src; 
+	    DEBUG("the source value is %x\n",source_global);
             DEBUG("write on device %s block num %u\n", s->blkdev->dev.name, i);
 
             rc += ata_lba48_read_write_dma(s,blocknum+i*512, src+i*512, 1);
-        }
-
+        } 
+	
         STATE_UNLOCK(s);
         if (callback) {
             callback(NK_BLOCK_DEV_STATUS_SUCCESS,context);
         }
-        return rc;
+        return rc;	
     }
-    
+  */
+    DEBUG("mapped callback in write_blocks head_pos: %d, tail_pos: %d\n", s->tx_map->head_pos, s->tx_map->tail_pos);
+	return rc;
 }
 
 static int get_characteristics(void *state, struct nk_block_dev_characteristics *c)
@@ -579,7 +716,132 @@ static void ata_device_addr_init(int devnum, void* dev)
     s->prdt[0].transfer_size = 512; //We just assume sector size is 512 bytes
     s->prdt[0].mark_end = 0x8000; //The MSB is set 1 so this marks the end of PRDT
     //s->prdt[0].val |= 0x8000000000000000UL;
+    DEBUG("interrupt pin is %x\n",s->pdev->cfg.dev_cfg.intr_pin);
+    DEBUG("interrupt line is %x\n",s->pdev->cfg.dev_cfg.intr_line);
+    s->pci_intr = s->pdev->cfg.dev_cfg.intr_pin;
+//	    DEBUG("the BMR_status is %x\n",inb(dev->BMR_status));
+    if (devnum < 2) {
+	    s->intr_vec = 14;
+    }
+    else 
+	    s->intr_vec = 15;
+    s->intr_flag =0;
 
+    s->tx_map = malloc(sizeof(*(s->tx_map)));
+    s->tx_map->map_ring = malloc(TX_DSC_COUNT*sizeof(*(s->tx_map->map_ring)));
+    s->rx_map = malloc(sizeof(*(s->rx_map)));
+    s->rx_map->map_ring = malloc(RX_DSC_COUNT*sizeof(*(s->rx_map->map_ring)));
+    s->rx_map->ring_len = RX_DSC_COUNT;
+    s->tx_map->ring_len = TX_DSC_COUNT;
+    s->tx_map->tail_pos = 0;
+    s->rx_map->tail_pos = 0;
+    s->tx_map->head_pos = 0;
+    s->rx_map->head_pos = 0;
+}
+
+static int ata_pci_irq_handler(excp_entry_t* excp, excp_vec_t vec, void *s)
+{
+	//Empty irq handler function!
+	struct ata_blkdev_state *dev = (struct ata_blkdev_state *) s;
+        uint8_t flag = 0;	
+	//dev->intr_flag	+= 1;
+//	DEBUG("the intr_flag is %x\n",dev->intr_flag);
+//	DEBUG("the BMR_CMD is %x\n",inb(dev->BMR_cmd));
+//	DEBUG("HEY!!! (irq handler)");
+//	DEBUG("the BMR_status is %x\n",inb(dev->BMR_status));
+//	DEBUG("the source global variable is %x\n",source_global);
+//
+	DEBUG("the status register in IRQ is %x\n",inb(dev->BMR_status));
+	DEBUG("IRQ Handler here!\n");
+	if (inb(dev->BMR_status) & 0x04)
+	      	outb(inb(dev->BMR_status) | 0x04, dev->BMR_status);
+	DEBUG("the devnum is %d\n",dev->channel*2 + dev->id);
+	DEBUG("the status register at the start of IRQ is %x\n",inb(dev->BMR_status));
+	if (inb(dev->BMR_cmd) != 0) {
+	nk_block_dev_status_t status = NK_BLOCK_DEV_STATUS_SUCCESS;
+	void * buf = NULL;
+	void (*callback) (nk_block_dev_status_t, void*) = NULL;
+        void *context = NULL;
+
+	if (inb(dev->BMR_cmd) == 1 & (!(inb(dev->BMR_status) & 0x01))) {
+	       	// Check BMR_status too??
+		flag = 0;
+		outb(0,dev->BMR_cmd);
+		DEBUG("actual IRQ Handler for write\n");
+//		void (*callback) (nk_block_dev_status_t, void*) = NULL;
+//		void *context = NULL;
+		//buf = NULL;
+		DEBUG("unmapping the write callback\n");
+		ata_unmap_callback(dev->tx_map,(uint64_t **) &callback, (void **)&context, (void **) &buf);
+	//	if (!(inb(dev->BMR_status) & 0x01)) {	
+	//		outb(0,dev->BMR_cmd);
+	/*		while (1) {
+				int d_status = inb(dev->status);
+			//	DEBUG("How many times am i printing\n");
+				if (!((d_status & 0x80) || (d_status & 0x08)))
+					break;
+			//	DEBUG("How many times am i printing\n");
+			}
+			int temp_status = inb(dev->BMR_status);
+			if (temp_status & 0x02) {
+				status = NK_BLOCK_DEV_STATUS_ERROR;
+			}	
+	//	}
+		DEBUG("Interrupt serviced, calling back!\n");
+		DEBUG("the callback value in IRQ is 0x%p\n",callback);
+//		STATE_LOCK_CONF;
+//		STATE_UNLOCK(dev);
+		if (callback) {
+			DEBUG("invoking callback function: 0x%p\n", callback);
+			callback(status,context);
+		} */
+	}
+	else if  (inb(dev->BMR_cmd) == 9 & (!(inb(dev->BMR_status) & 0x01))) {
+		flag = 1;
+		outb(0,dev->BMR_cmd);
+                DEBUG("actual IRQ Handler for read\n");
+           //     void (*callback) (nk_block_dev_status_t, void*) = NULL;
+           //     void *context = NULL;
+		//buf = NULL;
+                nk_block_dev_status_t status = NK_BLOCK_DEV_STATUS_SUCCESS;
+                DEBUG("unmapping the write callback\n");
+                ata_unmap_callback(dev->rx_map,(uint64_t **) &callback, (void **)&context, (void **) &buf);
+
+	}
+	while (1) {
+                  int d_status = inb(dev->status);
+                        //      DEBUG("How many times am i printing\n");
+                  if (!((d_status & 0x80) || (d_status & 0x08)))
+                          break;
+                  }
+        int temp_status = inb(dev->BMR_status);
+        if (temp_status & 0x02) {
+        	status = NK_BLOCK_DEV_STATUS_ERROR;
+        }
+	if (flag == 1) {
+		memcpy(buf, dev->mem_buffer, 512);
+		uint64_t* temp_buf = (uint64_t*) buf;
+		for (int i = 0; i < 512; i++) {
+            		printk("%c",temp_buf[i]);
+            		if (i%64 == 0) {
+                		printk("\n");
+                	}
+           	}
+
+	}	
+	DEBUG("Interrupt serviced, calling back!\n");
+        DEBUG("the callback value in IRQ is 0x%p\n",callback);
+//              STATE_LOCK_CONF;
+//              STATE_UNLOCK(dev);
+
+
+        if (callback) {
+        	DEBUG("invoking callback function: 0x%p\n", callback);
+                callback(status,context);
+        }
+}
+	IRQ_HANDLER_END();
+	return 0;
 }
 
 static void discover_device(int channel, int id, struct pci_bus *bus, struct pci_dev *pdev)
@@ -594,8 +856,10 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
 
     spinlock_init(&s->lock); //do we really need this while booting
     ata_device_addr_init(devnum, s);
+    DEBUG("the head_pos_tx_1 is %x\n",s->tx_map->head_pos);
+    DEBUG("the head_pos_rx_1 is %x\n",s->rx_map->head_pos);
 
-    
+
     s->channel = channel;
     s->id = id;
     s->controller = &controller;
@@ -617,11 +881,18 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
                  s->type==HD ? "HD" : s->type==CD ? "CD" : "UNKNOWN",
                  s->block_size,s->num_blocks );
         } else {
-            DEBUG("Failed to identify device\n");
+            DEBUG("Failed totx_ identify device\n");
         }
     } else {
         DEBUG("Nonexistent or unsupported device type detected\n");
     }
+    //register the irq handler
+    if (devnum % 2 == 0) {
+    	register_irq_handler(s->intr_vec,ata_pci_irq_handler,s);
+    	nk_unmask_irq(s->intr_vec);
+    }
+    DEBUG("the head_pos_tx_2 is %x\n",s->tx_map->head_pos);
+    DEBUG("the head_pos_rx_2 is %x\n",s->rx_map->head_pos);
 
 }
 
