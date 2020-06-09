@@ -1,0 +1,116 @@
+\documentclass[11pt]{article}
+\usepackage{fullpage}
+\usepackage{epsfig}
+\usepackage{algorithm}
+\usepackage[noend]{algorithmic}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumerate}
+\usepackage{framed}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{tabto}
+\usepackage{xcolor}
+
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\usepackage{enumitem}
+
+% FILL IN THE SPECIFICS OF EACH HOMEWORK HERE
+\newcommand{\course}{EECS 446}
+\newcommand{\semester}{Spring 2020}
+\newcommand{\name}{Kernel and Other Low-level Software Development}
+%%%
+%%%
+%%% PLEASE FILL OUT YOUR NAME AND THE HOMEWORK/PROBLEM NUMBER
+%%% DO NOT INCLUDE STUDENT NAMES, FOR ANONYMOUS PEER GRADING PURPOSES.
+%%%
+%%%
+\newcommand{\hwk}{Final Report}
+
+\newcommand{\reportname}{ATA Driver Report}
+
+
+\usepackage[margin=3cm]{caption}
+
+
+%%% You can ignore the following stuff, it's just for formatting purposes
+\textheight=8.6in
+\setlength{\textwidth}{6.44in}
+\addtolength{\headheight}{\baselineskip}
+% enumerate uses a), b), c), ...
+\renewcommand{\labelenumi}{\alph{enumi})}
+% Sets the style for fancy pages (namely, all but first page)
+% Changes the title box on the first page
+\renewcommand\maketitle{
+\begin{center}
+  {\huge\bf\reportname}\\
+\begin{tabular*}{6.44in}{l @{\extracolsep{\fill}}c r}
+%\bfseries  &  & \bfseries \course ~\semester \\
+%\bfseries&  & \bfseries  \hwk  \\
+\bfseries   &   &  \bfseries \\
+\bfseries   &   &  \bfseries \\
+Name: Ashwin Chidambaram, SID:\bfseries  &  & \bfseries \course ~\semester\\
+\-\hspace{1.15cm} Ujjwal Sai, SID: \bfseries&  & \bfseries  \hwk \\
+\-\hspace{1.15cm} Haoxuan Zhang, SID: 3173595
+\end{tabular*}
+\end{center} }
+
+
+%% adjustments for dynamic programming.
+
+%\titleformat{\subsection}{\bf}{Part \thesubsection:}{1ex}{}
+\titleformat{\section}[runin]{\normalsize\bfseries}{\thesection.}{5pt}{}
+%\renewcommand{\thesubsection}{\alph{subsection}}
+\titleformat{\subsection}[runin]{\normalsize\bfseries}{\-\hspace{0.5cm}\thesubsection}{5pt}{}
+%\titleformat{\section}{\wrap}{}{}{}{}
+
+
+
+%%
+%%
+%% THE REAL STUFF STARTS HERE
+%%
+%%
+\begin{document}
+\maketitle
+\titlelabel{\thetitle.\quad}
+
+\section{Section 1 \\}
+Text Example \\
+A new line!\\
+
+A new line!
+
+\subsection{subsection 1 \\}
+Test Example \\
+A new line!\\
+
+A new line!\\
+\-\hspace{1cm} indent 1 cm
+
+%example for figure
+\begin{figure}[h!]
+  \center
+  \includegraphics[width=0.5\textwidth]{./Figure/NDA.png}
+  \caption{This is caption}
+  \label{any_name}
+\end{figure}
+
+Reference Firgure \ref{any_name} %example: fig:figure1 and reference \ref{fig:figure1}
+
+Reference 1: \cite{Ref1}
+
+
+
+\section{}
+
+\section{}
+\newpage
+\begin{thebibliography}{9}
+\bibitem{Ref1}
+Reference Here
+
+\end{thebibliography}
+\end{document}
