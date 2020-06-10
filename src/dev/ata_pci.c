@@ -369,13 +369,6 @@ static int ata_lba48_read_write_dma(void* state,
         return -1;
     }
 
-   /* while(1) {
-        int status = inb(s->BMR_status);
-	DEBUG("The BMR status before every thing is: 0x%x\n", status);
-        if (status & 0x4)
-            break;
-    } 
-   */
     DEBUG("Write a 0x04 to BMR Status\n");
     outb(0x4, s->BMR_status);
     
@@ -388,13 +381,7 @@ static int ata_lba48_read_write_dma(void* state,
     DEBUG("The status after writing 0x4 is: %x\n", BMR_status);
 
     outb(0, s->BMR_cmd);
-    //outb(0x66, s->BMR_status);
-    //BMR_status = inb(s->BMR_status);
-    //DEBUG("The status after writing 0x66 is: %x\n", BMR_status);
     outl((uint32_t)(uint64_t)s->prdt_phys, s->BMR_prdt);
- //   DEBUG("The base address of the prdt for this transfer is: %x\n", s->prdt_phys);
- //   DEBUG("The content of the first data in the prdt is: %x\n", *((uint32_t*)s->prdt_phys));
- //   DEBUG("The content of the second data element in membuffer is: %c\n", ((char*)(*((uint32_t*)s->prdt_phys)))[1]);
     outb(0xe0 | (s->id << 4) | lba[6] & 0xf0 >> 4, s->head);//probably this selected the dirve, 
     DEBUG("The head register is %x\n", inb(s->head));
     outb(0,s->sector_count);
@@ -409,27 +396,6 @@ static int ata_lba48_read_write_dma(void* state,
     DEBUG("LBA and sector count completed\n");
 
     int status = inb(s->BMR_status); 
- //   DEBUG("The BMR status before start is: %x\n", status);
-/*
-    char* p = inl(s->BMR_prdt);
-    *(uint64_t*) p = 0x8000020000106001UL;
-    DEBUG("BMR_prdt = %p\n", p);
-    //nk_dump_mem(p, 32);
-    for (int i = 0; i < 32; i++) {
-        printk("%02x", p[i]);
-    }
-    printk("\n");
-   DEBUG("BMR prdt_phys is %p\n", s->prdt_phys);
-*/
-
-    
-    //if(ata_wait(s,0)) {
-//	    ERROR("wait failed - resetting\n");
-//            ata_reset(s);
- //           return -1;
-  //  }
-
-    //s->intr_flag = 1;
 
     if (write) {
         memcpy(s->mem_buffer, buf, 512);
@@ -443,52 +409,6 @@ static int ata_lba48_read_write_dma(void* state,
 
     DEBUG("drive status is %x\n", inb(s->status));
     DEBUG("BMR status is %x\n", inb(s->BMR_status));
-/*  DEBUG("drive status is %x\n", inb(s->status));
-    DEBUG("BMR status is %x\n", inb(s->BMR_status));
-    DEBUG("drive status is %x\n", inb(s->status));
-
-    DEBUG("BMR cmd is %x\n", inb(s->BMR_cmd));
-
-
-
-    //polling and wait  // This will stuck the process if it is (s, 1)
-    //if(ata_wait(s,0)) {
-//	    ERROR("wait failed - resetting\n");
-//            ata_reset(s);
- //           return -1;
-   // }
-    DEBUG("Going into the while loop\n");
-
-    while(1) {
-        int status = inb(s->BMR_status);
-	int dstatus = inb(s->status);
-	//for (int i = 0; i < 512; i++) {
-	//    DEBUG("values = %c\n", ((char*)(uint64_t)s->prdt[0].buffer_phys)[i]);
-	//    //DEBUG("phys values = %c\n", s->)
-	//}
-        DEBUG("BMR status = %x\n", status);
-	DEBUG("Drive status = %x\n", dstatus);
-	DEBUG("interrupt pin is %x\n",s->pdev->cfg.dev_cfg.intr_pin);
-	if((status & 0x01)) { //previous if statement is if(!(status & 0x4))
-	    continue;
-	}
-
-	if (!((dstatus & 0x80) || (dstatus & 0x08))) {
-	    break;
-	}
-    }
-
-//	DEBUG("%x\n",)
-    if (!write) {
-        memcpy(buf, s->mem_buffer, 512);
-	for (int i = 0; i < 512; i++) {
-	    printk("%c", buf[i]);
-	    if (i%64 == 0) {
-	        printk("\n");
-	  	}
-	   }
-	}
-*/
     return 0;
 }
 
@@ -525,21 +445,16 @@ static int ata_map_callback(struct ata_map_ring* map,
                               void* context,void* buf)
 {
   DEBUG("map callback head_pos %d tail_pos %d\n", map->head_pos, map->tail_pos);
-  DEBUG("the ring_len is %d\n",map->ring_len);
   if(map->head_pos == ((map->tail_pos + 1) % map->ring_len)) {
     // when the mapping callback queue is full
-    DEBUG("im here!!!\n");
     ERROR("Callback mapping queue is full.\n");
     return -1;
   }
   DEBUG("tail_pos %d\n", map->tail_pos);
   uint64_t i = map->tail_pos;
   struct ata_fn_map* fnmap = (map->map_ring + i);
-   DEBUG("im here!!!_2\n");
    fnmap->callback = callback;
-   DEBUG("im here!!!_2.5\n");
    fnmap->context = (uint64_t *)context;
-   DEBUG("im here!!!_3\n");
    fnmap->buf = (uint64_t *) buf;
   map->tail_pos = (1 + map->tail_pos) % map->ring_len;
   DEBUG("mapped callback head_pos: %d, tail_pos: %d\n", map->head_pos, map->tail_pos);
@@ -744,19 +659,12 @@ static int ata_pci_irq_handler(excp_entry_t* excp, excp_vec_t vec, void *s)
 	//Empty irq handler function!
 	struct ata_blkdev_state *dev = (struct ata_blkdev_state *) s;
         uint8_t flag = 0;	
-	//dev->intr_flag	+= 1;
-//	DEBUG("the intr_flag is %x\n",dev->intr_flag);
-//	DEBUG("the BMR_CMD is %x\n",inb(dev->BMR_cmd));
-//	DEBUG("HEY!!! (irq handler)");
-//	DEBUG("the BMR_status is %x\n",inb(dev->BMR_status));
-//	DEBUG("the source global variable is %x\n",source_global);
-//
 	DEBUG("the status register in IRQ is %x\n",inb(dev->BMR_status));
 	DEBUG("IRQ Handler here!\n");
 	if (inb(dev->BMR_status) & 0x04)
 	      	outb(inb(dev->BMR_status) | 0x04, dev->BMR_status);
 	DEBUG("the devnum is %d\n",dev->channel*2 + dev->id);
-	DEBUG("the status register at the start of IRQ is %x\n",inb(dev->BMR_status));
+	DEBUG("the status register After clearing IRQ bit is %x\n",inb(dev->BMR_status));
 	if (inb(dev->BMR_cmd) != 0) {
 	nk_block_dev_status_t status = NK_BLOCK_DEV_STATUS_SUCCESS;
 	void * buf = NULL;
@@ -768,41 +676,13 @@ static int ata_pci_irq_handler(excp_entry_t* excp, excp_vec_t vec, void *s)
 		flag = 0;
 		outb(0,dev->BMR_cmd);
 		DEBUG("actual IRQ Handler for write\n");
-//		void (*callback) (nk_block_dev_status_t, void*) = NULL;
-//		void *context = NULL;
-		//buf = NULL;
 		DEBUG("unmapping the write callback\n");
 		ata_unmap_callback(dev->tx_map,(uint64_t **) &callback, (void **)&context, (void **) &buf);
-	//	if (!(inb(dev->BMR_status) & 0x01)) {	
-	//		outb(0,dev->BMR_cmd);
-	/*		while (1) {
-				int d_status = inb(dev->status);
-			//	DEBUG("How many times am i printing\n");
-				if (!((d_status & 0x80) || (d_status & 0x08)))
-					break;
-			//	DEBUG("How many times am i printing\n");
-			}
-			int temp_status = inb(dev->BMR_status);
-			if (temp_status & 0x02) {
-				status = NK_BLOCK_DEV_STATUS_ERROR;
-			}	
-	//	}
-		DEBUG("Interrupt serviced, calling back!\n");
-		DEBUG("the callback value in IRQ is 0x%p\n",callback);
-//		STATE_LOCK_CONF;
-//		STATE_UNLOCK(dev);
-		if (callback) {
-			DEBUG("invoking callback function: 0x%p\n", callback);
-			callback(status,context);
-		} */
-	}
+		}
 	else if  (inb(dev->BMR_cmd) == 9 & (!(inb(dev->BMR_status) & 0x01))) {
 		flag = 1;
 		outb(0,dev->BMR_cmd);
                 DEBUG("actual IRQ Handler for read\n");
-           //     void (*callback) (nk_block_dev_status_t, void*) = NULL;
-           //     void *context = NULL;
-		//buf = NULL;
                 nk_block_dev_status_t status = NK_BLOCK_DEV_STATUS_SUCCESS;
                 DEBUG("unmapping the write callback\n");
                 ata_unmap_callback(dev->rx_map,(uint64_t **) &callback, (void **)&context, (void **) &buf);
@@ -810,7 +690,6 @@ static int ata_pci_irq_handler(excp_entry_t* excp, excp_vec_t vec, void *s)
 	}
 	while (1) {
                   int d_status = inb(dev->status);
-                        //      DEBUG("How many times am i printing\n");
                   if (!((d_status & 0x80) || (d_status & 0x08)))
                           break;
                   }
@@ -820,19 +699,17 @@ static int ata_pci_irq_handler(excp_entry_t* excp, excp_vec_t vec, void *s)
         }
 	if (flag == 1) {
 		memcpy(buf, dev->mem_buffer, 512);
-		uint64_t* temp_buf = (uint64_t*) buf;
-		for (int i = 0; i < 512; i++) {
+		//uint8_t* temp_buf = (uint8_t*) buf;
+		/*for (int i = 0; i < 512; i++) {
             		printk("%c",temp_buf[i]);
             		if (i%64 == 0) {
                 		printk("\n");
                 	}
-           	}
+           	}*/
 
 	}	
 	DEBUG("Interrupt serviced, calling back!\n");
         DEBUG("the callback value in IRQ is 0x%p\n",callback);
-//              STATE_LOCK_CONF;
-//              STATE_UNLOCK(dev);
 
 
         if (callback) {
@@ -891,9 +768,6 @@ static void discover_device(int channel, int id, struct pci_bus *bus, struct pci
     	register_irq_handler(s->intr_vec,ata_pci_irq_handler,s);
     	nk_unmask_irq(s->intr_vec);
     }
-    DEBUG("the head_pos_tx_2 is %x\n",s->tx_map->head_pos);
-    DEBUG("the head_pos_rx_2 is %x\n",s->rx_map->head_pos);
-
 }
 
 
